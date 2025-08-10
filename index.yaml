@@ -1,0 +1,14 @@
+apiVersion: v1
+entries:
+  my-app:
+  - apiVersion: v2
+    appVersion: "1.0"
+    created: "2025-08-10T17:15:00.722759625Z"
+    description: A simple Helm chart example
+    digest: a1f7e6fde73040ad333392cc451c5f9ec940db5d32b291caf2d0b06d911b7947
+    name: my-app
+    type: application
+    urls:
+    - https://github.com/rohin21/helm-public-repo/releases/download/my-app-0.1.2/my-app-0.1.2.tgz
+    version: 0.1.2
+generated: "2025-08-10T17:15:00.722764274Z"
