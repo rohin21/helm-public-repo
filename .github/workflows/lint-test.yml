@@ -1,0 +1,154 @@
+name: Lint and Test Charts
+
+on:
+  pull_request:
+    paths:
+      - 'charts/**'
+  push:
+    branches:
+      - main
+    paths:
+      - 'charts/**'
+
+jobs:
+  lint-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: v3.13.3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+          check-latest: true
+
+      - name: Set up chart-testing
+        uses: helm/chart-testing-action@v2.6.1
+
+      - name: Add helm repos
+        run: |
+          helm repo add bitnami https://charts.bitnami.com/bitnami
+          helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+          helm repo update
+
+      - name: List changed charts
+        id: list-changed
+        run: |
+          changed=$(ct list-changed --target-branch ${{ github.event.repository.default_branch }})
+          if [[ -n "$changed" ]]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Changed charts:"
+            echo "$changed"
+          fi
+
+      - name: Lint charts
+        if: steps.list-changed.outputs.changed == 'true'
+        run: ct lint --target-branch ${{ github.event.repository.default_branch }}
+
+      - name: Validate chart documentation
+        if: steps.list-changed.outputs.changed == 'true'
+        run: |
+          for chart in $(ct list-changed --target-branch ${{ github.event.repository.default_branch }}); do
+            if [[ ! -f "$chart/README.md" ]]; then
+              echo "ERROR: $chart is missing README.md"
+              exit 1
+            fi
+            if [[ ! -f "$chart/Chart.yaml" ]]; then
+              echo "ERROR: $chart is missing Chart.yaml"
+              exit 1
+            fi
+            # Check for required fields in Chart.yaml
+            if ! grep -q "description:" "$chart/Chart.yaml"; then
+              echo "ERROR: $chart/Chart.yaml missing description field"
+              exit 1
+            fi
+            if ! grep -q "version:" "$chart/Chart.yaml"; then
+              echo "ERROR: $chart/Chart.yaml missing version field"
+              exit 1
+            fi
+            echo "✓ $chart documentation is valid"
+          done
+
+      - name: Create kind cluster
+        if: steps.list-changed.outputs.changed == 'true'
+        uses: helm/kind-action@v1.8.0
+        with:
+          config: |
+            kind: Cluster
+            apiVersion: kind.x-k8s.io/v1alpha4
+            nodes:
+            - role: control-plane
+              kubeadmConfigPatches:
+              - |
+                kind: InitConfiguration
+                nodeRegistration:
+                  kubeletExtraArgs:
+                    node-labels: "ingress-ready=true"
+              extraPortMappings:
+              - containerPort: 80
+                hostPort: 80
+                protocol: TCP
+              - containerPort: 443
+                hostPort: 443
+                protocol: TCP
+
+      - name: Install chart dependencies
+        if: steps.list-changed.outputs.changed == 'true'
+        run: |
+          for chart in $(ct list-changed --target-branch ${{ github.event.repository.default_branch }}); do
+            if [[ -f "$chart/Chart.lock" ]]; then
+              echo "Installing dependencies for $chart"
+              helm dependency update "$chart"
+            fi
+          done
+
+      - name: Run chart tests
+        if: steps.list-changed.outputs.changed == 'true'
+        run: ct install --target-branch ${{ github.event.repository.default_branch }}
+
+      - name: Run custom chart tests
+        if: steps.list-changed.outputs.changed == 'true'
+        run: |
+          for chart in $(ct list-changed --target-branch ${{ github.event.repository.default_branch }}); do
+            if [[ -d "$chart/tests" ]]; then
+              echo "Running custom tests for $chart"
+              # Install the chart
+              chart_name=$(basename "$chart")
+              helm install "test-$chart_name" "$chart" --wait --timeout 5m
+              
+              # Run helm test if test files exist
+              if ls "$chart"/tests/*.yaml 1> /dev/null 2>&1; then
+                helm test "test-$chart_name" --timeout 5m
+              fi
+              
+              # Cleanup
+              helm uninstall "test-$chart_name"
+            fi
+          done
+
+  yamllint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - name: Install yamllint
+        run: pip install yamllint
+
+      - name: Lint YAML files
+        run: |
+          find charts/ -name "*.yaml" -o -name "*.yml" | xargs yamllint -c lintconf.yaml
