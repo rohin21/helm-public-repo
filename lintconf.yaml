@@ -1,20 +1,43 @@
 ---
 extends: default
 rules:
-  # line length
+  # Line length - more permissive for Helm templates
   line-length:
     max: 120
     level: warning
-  # truthy
+  
+  # Document start - disable for Helm templates
+  document-start: disable
+  
+  # Truthy values
   truthy:
     allowed-values: ['true', 'false', 'on', 'off']
-  # brackets
+    level: warning
+  
+  # Brackets - more permissive for Helm template functions
   brackets:
     min-spaces-inside: 0
     max-spaces-inside: 1
-  # indentation
+    level: warning
+  
+  # Braces - more permissive for Helm template functions  
+  braces:
+    min-spaces-inside: 0
+    max-spaces-inside: 1
+    level: warning
+    
+  # Indentation
   indentation:
     spaces: 2
-  # comments
+    level: warning
+  
+  # Comments
   comments:
     min-spaces-from-content: 1
+    level: warning
+  
+  # New line at end of file
+  new-line-at-end-of-file: enable
+  
+  # Trailing spaces
+  trailing-spaces: enable

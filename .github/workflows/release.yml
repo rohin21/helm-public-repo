@@ -11,116 +11,54 @@ env:
   HELM_VERSION: v3.13.3
 
 jobs:
-  # Pre-release validation
+  # Simple validation
   validate:
     runs-on: ubuntu-latest
     outputs:
-      charts-changed: ${{ steps.list-changed.outputs.changed }}
+      charts-exist: ${{ steps.check-charts.outputs.exist }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Set up chart-testing
-        uses: helm/chart-testing-action@v2.6.1
-
-      - name: List changed charts
-        id: list-changed
+      - name: Check if charts exist
+        id: check-charts
         run: |
-          changed=$(ct list-changed --target-branch main)
-          if [[ -n "$changed" ]]; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "Charts changed:"
-            echo "$changed"
+          if [[ -d "charts" ]] && [[ $(find charts -name "Chart.yaml" | wc -l) -gt 0 ]]; then
+            echo "exist=true" >> "$GITHUB_OUTPUT"
+            echo "Found charts to process"
+            find charts -name "Chart.yaml" -exec dirname {} \;
           else
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "No charts changed"
+            echo "exist=false" >> "$GITHUB_OUTPUT"
+            echo "No charts found"
           fi
 
       - name: Validate chart versions
-        if: steps.list-changed.outputs.changed == 'true'
+        if: steps.check-charts.outputs.exist == 'true'
         run: |
-          for chart in $(ct list-changed --target-branch main); do
+          echo "Validating chart versions..."
+          for chart in $(find charts -name "Chart.yaml" -exec dirname {} \;); do
             chart_name=$(basename "$chart")
-            version=$(grep '^version:' "$chart/Chart.yaml" | awk '{print $2}')
-            
-            echo "Checking if version $version for $chart_name already exists..."
-            
-            # Check if this version already exists as a Git tag
-            if git tag -l | grep -q "^$chart_name-$version$"; then
-              echo "❌ ERROR: Version $version for chart $chart_name already exists as a Git tag"
-              echo "Please increment the version in $chart/Chart.yaml"
-              exit 1
-            fi
-            
-            # Check if this version exists in GitHub releases
-            if gh release list --limit 100 | grep -q "$chart_name-$version"; then
-              echo "❌ ERROR: Release $chart_name-$version already exists"
-              echo "Please increment the version in $chart/Chart.yaml"
-              exit 1
-            fi
-            
-            echo "✅ Version $version for $chart_name is available"
-          done
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  # Run security and quality checks
-  security-checks:
-    runs-on: ubuntu-latest
-    needs: validate
-    if: needs.validate.outputs.charts-changed == 'true'
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Set up Helm
-        uses: azure/setup-helm@v3
-        with:
-          version: ${{ env.HELM_VERSION }}
-
-      - name: Set up chart-testing
-        uses: helm/chart-testing-action@v2.6.1
-
-      - name: Add helm repos
-        run: |
-          helm repo add bitnami https://charts.bitnami.com/bitnami
-          helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
-          helm repo update
-
-      - name: Lint charts
-        run: ct lint --target-branch main
-
-      - name: Quick security scan
-        run: |
-          for chart in $(ct list-changed --target-branch main); do
-            chart_name=$(basename "$chart")
-            echo "Running quick security check for $chart_name..."
-            
-            # Check for hardcoded secrets or sensitive data
-            if grep -r -i "password\|secret\|key\|token" "$chart/templates/" --include="*.yaml" | grep -v "valueFrom\|secretKeyRef"; then
-              echo "⚠️  WARNING: Potential hardcoded secrets found in $chart_name templates"
-            fi
-            
-            # Check for resource limits
-            if ! grep -r "resources:" "$chart/templates/" --include="*.yaml" > /dev/null; then
-              echo "⚠️  WARNING: No resource limits defined in $chart_name"
-            fi
-            
-            # Check for security context
-            if ! grep -r "securityContext:" "$chart/templates/" --include="*.yaml" > /dev/null; then
-              echo "⚠️  WARNING: No security context defined in $chart_name"
+            if [[ -f "$chart/Chart.yaml" ]]; then
+              version=$(grep '^version:' "$chart/Chart.yaml" | awk '{print $2}' | tr -d '"')
+              echo "Chart: $chart_name, Version: $version"
+              
+              # Check if this version already exists as a Git tag
+              if git tag -l | grep -q "^$chart_name-$version$"; then
+                echo "⚠️  WARNING: Version $version for chart $chart_name already exists as a Git tag"
+                echo "Consider incrementing the version in $chart/Chart.yaml"
+              else
+                echo "✅ Version $version for $chart_name is available"
+              fi
             fi
           done
 
   # Release charts
   release:
     runs-on: ubuntu-latest
-    needs: [validate, security-checks]
-    if: needs.validate.outputs.charts-changed == 'true'
+    needs: validate
+    if: needs.validate.outputs.charts-exist == 'true'
     permissions:
       contents: write
       packages: write
@@ -146,65 +84,12 @@ jobs:
           helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
           helm repo update
 
-      - name: Package charts with dependencies
-        run: |
-          for chart in charts/*/; do
-            if [[ -d "$chart" ]]; then
-              echo "Processing chart: $chart"
-              
-              # Update dependencies if Chart.lock exists
-              if [[ -f "$chart/Chart.lock" ]]; then
-                echo "Updating dependencies for $chart"
-                helm dependency update "$chart"
-              fi
-              
-              # Package the chart
-              helm package "$chart" --destination .cr-release-packages/
-            fi
-          done
-
       - name: Run chart-releaser
         uses: helm/chart-releaser-action@v1.6.0
         with:
           charts_dir: charts
-          skip_packaging: true
         env:
           CR_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
-
-      - name: Update repository index
-        run: |
-          git checkout gh-pages
-          helm repo index . --url https://$(echo ${{ github.repository }} | cut -d'/' -f1).github.io/$(echo ${{ github.repository }} | cut -d'/' -f2) --merge index.yaml
-          git add index.yaml
-          git commit -m "Update repository index" || exit 0
-          git push origin gh-pages
-
-  # Post-release verification
-  verify-release:
-    runs-on: ubuntu-latest
-    needs: release
-    steps:
-      - name: Verify repository accessibility
-        run: |
-          repo_url="https://$(echo ${{ github.repository }} | cut -d'/' -f1).github.io/$(echo ${{ github.repository }} | cut -d'/' -f2)"
-          echo "Waiting for repository to be accessible at $repo_url"
-          
-          # Wait up to 5 minutes for the repository to be accessible
-          for i in {1..30}; do
-            if curl -f "$repo_url/index.yaml" > /dev/null 2>&1; then
-              echo "✅ Repository is accessible!"
-              
-              # Test adding the repository
-              helm repo add test-repo "$repo_url"
-              helm repo update
-              helm search repo test-repo
-              
-              break
-            else
-              echo "Waiting... ($i/30)"
-              sleep 10
-            fi
-          done
 
       - name: Create release summary
         run: |

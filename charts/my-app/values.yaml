@@ -1,14 +1,18 @@
+---
 # Default values for my-app
 replicaCount: 1
 
 image:
   repository: nginx
-  pullPolicy: IfNotPresent
-  tag: "1.21"
+  pullPolicy: Always  # Changed from IfNotPresent for security
+  tag: "1.21@sha256:a05b0cdd4fc1be3b224ba9662ebdf98fe44c09c0c9215b45f84344c12867002e"  # Added digest
 
 imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
+
+# Namespace configuration
+namespaceOverride: ""
 
 serviceAccount:
   create: true
@@ -19,6 +23,8 @@ podAnnotations: {}
 
 podSecurityContext:
   fsGroup: 2000
+  runAsNonRoot: true
+  runAsUser: 10000  # High UID to avoid host conflict
 
 securityContext:
   capabilities:
@@ -26,7 +32,10 @@ securityContext:
     - ALL
   readOnlyRootFilesystem: true
   runAsNonRoot: true
-  runAsUser: 1000
+  runAsUser: 10000  # High UID to avoid host conflict
+  allowPrivilegeEscalation: false
+  seccompProfile:
+    type: RuntimeDefault
 
 service:
   type: ClusterIP
@@ -82,3 +91,9 @@ readinessProbe:
 podDisruptionBudget:
   enabled: false
   minAvailable: 1
+
+# Network policy
+networkPolicy:
+  enabled: false
+  ingress: []
+  egress: []

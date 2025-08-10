@@ -1,3 +1,4 @@
+---
 apiVersion: v2
 name: my-app
 description: A production-ready Helm chart for a web application
@@ -5,7 +6,7 @@ home: https://github.com/rohin21/helm-public-repo
 sources:
   - https://github.com/rohin21/helm-public-repo
 type: application
-version: 0.2.0
+version: 0.3.0
 appVersion: "1.0.0"
 maintainers:
   - name: Rohin
